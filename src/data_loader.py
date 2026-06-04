@@ -109,7 +109,7 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
             prepare_fn = prepare_eval_features
             prepare_kwargs = {}
 
-        # Tokenize
+        # Tokenize (auto-detects Vietnamese via language column)
         processed_dataset = dataset.map(
             lambda examples: prepare_fn(
                 examples=examples,
@@ -119,8 +119,6 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
                 max_length=config.max_length,
                 doc_stride=config.doc_stride,
                 padding=config.padding,
-                use_vietnamese_segmentation=config.use_vietnamese_segmentation,
-                segmentation_tool=config.segmentation_tool,
                 **prepare_kwargs,
             ),
             batched=True,
@@ -191,8 +189,6 @@ def load_dataset_for_inference(
         max_length=config.max_length,
         doc_stride=config.doc_stride,
         padding=config.padding,
-        use_vietnamese_segmentation=config.use_vietnamese_segmentation,
-        segmentation_tool=config.segmentation_tool,
     )
 
     # Convert to tensors
