@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-import numpy as np
 from transformers import PreTrainedTokenizerBase
+
+try:
+    from .vietnamese import has_vietnamese, segment_texts
+except ImportError:
+    from vietnamese import has_vietnamese, segment_texts
 
 logger = logging.getLogger(__name__)
 
@@ -19,29 +22,16 @@ def prepare_train_features(
     padding: str,
     answers_column: str,
     impossible_column: str,
-    use_vietnamese_segmentation: bool = False,
-    segmentation_tool: str = "underthesea",
 ) -> dict[str, list]:
     questions = [q.strip() for q in examples[question_column]]
-    contexts = examples[context_column]
+    contexts = list(examples[context_column])
     answers = examples[answers_column]
     is_impossible = examples[impossible_column]
 
-    if use_vietnamese_segmentation:
-        try:
-            if segmentation_tool == "pyvi":
-                from pyvi import ViTokenizer
-                contexts = [ViTokenizer.tokenize(c) for c in contexts]
-                questions = [ViTokenizer.tokenize(q) for q in questions]
-            else:
-                from underthesea import word_tokenize
-                contexts = [" ".join(word_tokenize(c)) for c in contexts]
-                questions = [" ".join(word_tokenize(q)) for q in questions]
-        except ImportError:
-            logger.warning(
-                "Segmentation tool '%s' not installed, skipping segmentation",
-                segmentation_tool,
-            )
+    if has_vietnamese(examples):
+        logger.info("Detected Vietnamese data, applying word segmentation")
+        questions = segment_texts(questions)
+        contexts = segment_texts(contexts)
 
     tokenized = tokenizer(
         questions,
@@ -72,9 +62,8 @@ def prepare_train_features(
             start_positions.append(cls_index)
             end_positions.append(cls_index)
         else:
-            answer_text = answer["text"][0]
             answer_start_char = answer["answer_start"][0]
-            answer_end_char = answer_start_char + len(answer_text)
+            answer_end_char = answer_start_char + len(answer["text"][0])
 
             sequence_ids = tokenized.sequence_ids(i)
 
@@ -116,27 +105,14 @@ def prepare_eval_features(
     max_length: int,
     doc_stride: int,
     padding: str,
-    use_vietnamese_segmentation: bool = False,
-    segmentation_tool: str = "underthesea",
 ) -> dict[str, list]:
     questions = [q.strip() for q in examples[question_column]]
-    contexts = examples[context_column]
+    contexts = list(examples[context_column])
 
-    if use_vietnamese_segmentation:
-        try:
-            if segmentation_tool == "pyvi":
-                from pyvi import ViTokenizer
-                contexts = [ViTokenizer.tokenize(c) for c in contexts]
-                questions = [ViTokenizer.tokenize(q) for q in questions]
-            else:
-                from underthesea import word_tokenize
-                contexts = [" ".join(word_tokenize(c)) for c in contexts]
-                questions = [" ".join(word_tokenize(q)) for q in questions]
-        except ImportError:
-            logger.warning(
-                "Segmentation tool '%s' not installed, skipping segmentation",
-                segmentation_tool,
-            )
+    if has_vietnamese(examples):
+        logger.info("Detected Vietnamese data, applying word segmentation")
+        questions = segment_texts(questions)
+        contexts = segment_texts(contexts)
 
     tokenized = tokenizer(
         questions,
