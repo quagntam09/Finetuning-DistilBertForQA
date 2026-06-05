@@ -1,7 +1,7 @@
 defaults:
   model_name: distilbert-base-multilingual-cased
   init_checkpoint_dir: null
-  dropout: 0.1
+  dropout_rate: 0.1
   freeze_encoder: false
 
   dataset_name: null
@@ -55,6 +55,12 @@ defaults:
   seed: 42
   logging_steps: 100
   log_level: info
+
+  lora_r: 8
+  lora_alpha: 16
+  lora_target_modules: ["q_lin", "v_lin", "k_lin", "out_lin"]
+  lora_dropout: 0.05
+  lora_bias: "none"
 
 default_profile: train_vi
 
