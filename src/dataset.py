@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 try:
     from .vietnamese import has_vietnamese, segment_texts
@@ -39,7 +39,8 @@ def prepare_train_features(
     answers = examples[answers_column]
     is_impossible = examples[impossible_column]
 
-    if has_vietnamese(examples):
+    # Normalize to fixed keys so has_vietnamese works with custom schemas
+    if has_vietnamese({"question": questions, "context": contexts}):
         logger.info("Detected Vietnamese data, applying word segmentation")
         questions = segment_texts(questions)
         contexts = segment_texts(contexts)
