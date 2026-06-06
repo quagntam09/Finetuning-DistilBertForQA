@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from transformers import PreTrainedTokenizerBase
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 try:
     from .vietnamese import (
@@ -86,15 +86,18 @@ def prepare_train_features(
     padding: str,
     answers_column: str,
     impossible_column: str,
+    use_vietnamese_segmentation: bool = True,
+    segmentation_tool: str | None = "underthesea",
 ) -> dict[str, list]:
     questions = [normalize_text(q) for q in examples[question_column]]
     contexts = [normalize_text(c) for c in examples[context_column]]
     answers = examples[answers_column]
     is_impossible = examples[impossible_column]
 
-    # Normalize to fixed keys so has_vietnamese works with custom schemas
-    if has_vietnamese({"question": questions, "context": contexts}):
+    if use_vietnamese_segmentation and has_vietnamese(examples):
         logger.info("Detected Vietnamese data, applying word segmentation")
+        if segmentation_tool and segmentation_tool != "underthesea":
+            logger.warning("Unsupported segmentation_tool=%s, using underthesea", segmentation_tool)
         contexts_orig = list(contexts)
         questions = segment_texts(questions)
         contexts = segment_texts(contexts)
@@ -174,12 +177,16 @@ def prepare_eval_features(
     max_length: int,
     doc_stride: int,
     padding: str,
+    use_vietnamese_segmentation: bool = True,
+    segmentation_tool: str | None = "underthesea",
 ) -> dict[str, list]:
     questions = [normalize_text(q) for q in examples[question_column]]
     contexts = [normalize_text(c) for c in examples[context_column]]
 
-    if has_vietnamese(examples):
+    if use_vietnamese_segmentation and has_vietnamese(examples):
         logger.info("Detected Vietnamese data, applying word segmentation")
+        if segmentation_tool and segmentation_tool != "underthesea":
+            logger.warning("Unsupported segmentation_tool=%s, using underthesea", segmentation_tool)
         questions = segment_texts(questions)
         contexts = segment_texts(contexts)
 

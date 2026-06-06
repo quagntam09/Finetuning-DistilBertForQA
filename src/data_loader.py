@@ -18,7 +18,8 @@ from .dataset import filter_qa_dataset, prepare_train_features, prepare_eval_fea
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
 
 
 def load_raw_datasets(config) -> DatasetDict:
@@ -35,32 +36,35 @@ def load_raw_datasets(config) -> DatasetDict:
         DatasetDict với splits "train", "validation", "test" (tùy khả dụng)
     """
 
-    project_root = DATA_DIR.parent
-
     def _resolve(path: str | None) -> str | None:
         if path is None:
             return None
-        p = Path(path)
-        if not p.is_absolute():
-            repo_relative = project_root / p
-            p = repo_relative if repo_relative.exists() else DATA_DIR / p
-        if not p.exists():
-            raise FileNotFoundError(f"Dataset file not found: {p}")
-        return str(p)
+        p = Path(path).expanduser()
+        candidates = [p] if p.is_absolute() else [PROJECT_ROOT / p, DATA_DIR / p]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+
+        checked = ", ".join(str(candidate) for candidate in candidates)
+        raise FileNotFoundError(f"Dataset file not found: {path}. Checked: {checked}")
 
     data_files: dict[str, str] = {}
 
     train = _resolve(config.train_file)
     if train:
         data_files["train"] = train
+        print(f"Load train data from: {train}")
 
     validation = _resolve(config.validation_file)
     if validation:
         data_files["validation"] = validation
+        print(f"Load validation data from: {validation}")
 
     test = _resolve(config.test_file)
     if test:
         data_files["test"] = test
+        print(f"Load test data from: {test}")
 
     if not data_files:
         raise ValueError(
@@ -90,8 +94,6 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
         - attention_mask: Attention mask
         - start_positions & end_positions (nếu is_training=True)
     """
-
-    from .dataset import prepare_train_features, prepare_eval_features
 
     raw_datasets = load_raw_datasets(config=config)
 
@@ -123,7 +125,7 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
             prepare_fn = prepare_eval_features
             prepare_kwargs = {}
 
-        # Tokenize (auto-detects Vietnamese via language column)
+        # Tokenize
         processed_dataset = dataset.map(
             lambda examples: prepare_fn(
                 examples=examples,
@@ -133,6 +135,8 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
                 max_length=config.max_length,
                 doc_stride=config.doc_stride,
                 padding=config.padding,
+                use_vietnamese_segmentation=config.use_vietnamese_segmentation,
+                segmentation_tool=config.segmentation_tool,
                 **prepare_kwargs,
             ),
             batched=True,
@@ -203,6 +207,8 @@ def load_dataset_for_inference(
         max_length=config.max_length,
         doc_stride=config.doc_stride,
         padding=config.padding,
+        use_vietnamese_segmentation=config.use_vietnamese_segmentation,
+        segmentation_tool=config.segmentation_tool,
     )
 
     # Convert to tensors

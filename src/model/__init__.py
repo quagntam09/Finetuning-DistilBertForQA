@@ -1,3 +1,5 @@
-from .config_model import TrainingConfig
+from .config_model import Config
 
-__all__ = ["TrainingConfig"]
+TrainingConfig = Config
+
+__all__ = ["Config", "TrainingConfig"]
