@@ -13,7 +13,7 @@ import logging
 
 from datasets import DatasetDict, load_dataset
 
-from .dataset import prepare_train_features, prepare_eval_features
+from .dataset import filter_qa_dataset, prepare_train_features, prepare_eval_features
 
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,15 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
         # Chọn hàm xử lý tùy theo split
         has_answers = config.answers_column in dataset.column_names
         has_context_labels = split_name in {"train", "validation"} and has_answers
+
+        # Quality filter (remove noisy samples)
+        if has_context_labels:
+            dataset = filter_qa_dataset(
+                dataset=dataset,
+                question_column=config.question_column,
+                context_column=config.context_column,
+                answers_column=config.answers_column,
+            )
 
         if has_context_labels:
             prepare_fn = prepare_train_features

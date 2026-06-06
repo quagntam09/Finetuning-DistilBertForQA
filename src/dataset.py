@@ -5,11 +5,57 @@ import logging
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 try:
-    from .vietnamese import has_vietnamese, segment_texts
+    from .vietnamese import (
+        has_vietnamese,
+        is_quality_sample,
+        normalize_text,
+        segment_texts,
+        validate_answer_in_segmented,
+    )
 except ImportError:
-    from vietnamese import has_vietnamese, segment_texts
+    from vietnamese import (
+        has_vietnamese,
+        is_quality_sample,
+        normalize_text,
+        segment_texts,
+        validate_answer_in_segmented,
+    )
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────
+#  Quality filtering (call BEFORE tokenization)
+# ──────────────────────────────────────────────
+
+def filter_qa_dataset(
+    dataset,
+    question_column: str,
+    context_column: str,
+    answers_column: str,
+) -> "Dataset":
+    """Remove low-quality QA samples from a HuggingFace ``Dataset``.
+
+    Applies :func:`is_quality_sample` per-row and filters out rows that fail.
+    Returns a new ``Dataset`` with the same schema (fewer rows).
+    """
+
+    def _filter_row(row) -> bool:
+        q = normalize_text(row[question_column])
+        c = normalize_text(row[context_column])
+        ans = row.get(answers_column) if isinstance(row, dict) else row[answers_column]
+        return is_quality_sample(c, q, ans)
+
+    n_before = len(dataset)
+    filtered = dataset.filter(_filter_row, batched=False)
+    n_after = len(filtered)
+    removed = n_before - n_after
+    if removed:
+        logger.info(
+            "Quality filter removed %d / %d samples (%.1f%%)",
+            removed, n_before, 100 * removed / n_before,
+        )
+    return filtered
 
 
 def _ensure_pad_token(tokenizer: PreTrainedTokenizerBase, padding: str) -> None:
@@ -41,15 +87,17 @@ def prepare_train_features(
     answers_column: str,
     impossible_column: str,
 ) -> dict[str, list]:
-    questions = [q.strip() for q in examples[question_column]]
-    contexts = list(examples[context_column])
+    questions = [normalize_text(q) for q in examples[question_column]]
+    contexts = [normalize_text(c) for c in examples[context_column]]
     answers = examples[answers_column]
     is_impossible = examples[impossible_column]
 
     if has_vietnamese(examples):
         logger.info("Detected Vietnamese data, applying word segmentation")
+        contexts_orig = list(contexts)
         questions = segment_texts(questions)
         contexts = segment_texts(contexts)
+        validate_answer_in_segmented(contexts_orig, contexts, answers)
 
     _ensure_pad_token(tokenizer, padding)
 
@@ -126,8 +174,8 @@ def prepare_eval_features(
     doc_stride: int,
     padding: str,
 ) -> dict[str, list]:
-    questions = [q.strip() for q in examples[question_column]]
-    contexts = list(examples[context_column])
+    questions = [normalize_text(q) for q in examples[question_column]]
+    contexts = [normalize_text(c) for c in examples[context_column]]
 
     if has_vietnamese(examples):
         logger.info("Detected Vietnamese data, applying word segmentation")
