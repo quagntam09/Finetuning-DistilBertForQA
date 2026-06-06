@@ -20,7 +20,14 @@ def _ensure_pad_token(tokenizer: PreTrainedTokenizerBase, padding: str) -> None:
     if tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
         return
-    tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+    raise RuntimeError(
+        "Tokenizer has no pad_token and no eos_token to reuse. "
+        "Set pad_token explicitly at tokenizer construction time "
+        "(e.g. tokenizer.pad_token = tokenizer.eos_token or "
+        "tokenizer.add_special_tokens({'pad_token': '[PAD]'})) "
+        "before the model is instantiated, or call "
+        "model.resize_token_embeddings() after adding new tokens."
+    )
 
 
 def prepare_train_features(
