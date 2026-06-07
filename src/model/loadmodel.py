@@ -2,10 +2,12 @@ import torch.nn as nn
 from transformers import DistilBertModel
 from peft import LoraConfig, get_peft_model
 from config_model import Config
+
+
 class CustomLoraDistilBertQA(nn.Module):
-    def __init__(self):
+    def __init__(self, config=None):
         super(CustomLoraDistilBertQA, self).__init__()
-        self.config = Config.from_yaml()
+        self.config = config or Config.from_yaml()
         self.basemodel = DistilBertModel.from_pretrained(self.config.model_name)
 
         lora_config = LoraConfig(
