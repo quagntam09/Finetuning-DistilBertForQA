@@ -72,7 +72,7 @@ Word segmentation dùng `underthesea.word_tokenize(..., format="text")`.
 | Tính chất | Giá trị |
 |-----------|---------|
 | Output format | `format="text"` — compound nối bằng `_` |
-| Thay đổi độ dài text | **Có** — tokenizer thêm/khoảng cách ở ranh giới từ |
+| Thay đổi độ dài text | **Có, ở một số trường hợp** — tokenizer có thể tách số/chữ (ví dụ `số1` → `số 1`) hoặc normalize whitespace |
 | API cũ (bug) | `word_tokenize(text)` → `list`, `" ".join()` → text y hệt input (no-op) |
 
 **Input:**
@@ -93,27 +93,55 @@ segment_texts(["Tôi là sinh viên", "Hà Nội là thủ đô"])
 
 ### 1.4 `validate_answer_in_segmented(contexts_orig, contexts_seg, answers) -> None`
 
-Căn chỉnh lại `answer_start` và `answer_text` sau word segmentation (vì segmentation có thể thay đổi độ dài text).
+Cập nhật `answer_text` sau word segmentation (cập nhật `answer_start` nếu vị trí bị dịch do tokenizer thay đổi whitespace).
+
+**Lưu ý:** `segment_texts` (dùng `format="text"`) thay ` ` → `_` trong compound words, là 1:1 (cùng độ dài). `answer_start` thường không đổi — chỉ `answer_text` cần update.
 
 **Cơ chế:**
-1. Thử vị trí cũ: `ctx_seg[start : start+len]` → nếu normalize `_`→` ` rồi so khớp thì OK
-2. Fallback: dùng regex `re.escape(ans_text).replace(r"\ ", "[_ ]")` tìm trong `ctx_seg`
+1. Thử vị trí cũ: `ctx_seg[start : start+len]` → nếu normalize `_`→` ` rồi so khớp thì OK (chỉ update `answer_text`)
+2. Fallback: dùng regex tìm lại trong `ctx_seg` (xử lý case vị trí bị dịch do tokenizer normalize whitespace)
 3. Nếu không tìm thấy → bỏ qua (sẽ bị đánh dấu impossible ở bước sau)
 
-**Input:**
+**Ví dụ 1 — common case (space→underscore 1:1, vị trí không đổi):**
+
+Input:
 ```python
-ctx_orig = ["Phạm Văn Đồng là thủ tướng"]
-ctx_seg  = ["Phạm_Văn_Đồng là thủ_tướng"]      # segment làm thay đổi độ dài
-answers  = [{"text": ["thủ tướng"], "answer_start": [21]}]
+ctx_orig = ["Phạm Văn Đồng là thủ tướng"]      # length 26
+ctx_seg  = ["Phạm_Văn_Đồng là thủ_tướng"]      # length 26 (space→underscore 1:1)
+answers  = [{"text": ["thủ tướng"], "answer_start": [17]}]
 
 validate_answer_in_segmented(ctx_orig, ctx_seg, answers)
 ```
 
-**Output (mutate answers):**
+Ouput (mutate answers):
 ```python
-answers  = [{"text": ["thủ_tướng"], "answer_start": [26]}]
-#         answer_start từ 21 → 26 (do "Phạm_Văn_Đồng" dài hơn "Phạm Văn Đồng" 2 ký tự)
-#         answer_text  từ "thủ tướng" → "thủ_tướng" (đã segment)
+answers  = [{"text": ["thủ_tướng"], "answer_start": [17]}]
+#         answer_start giữ nguyên 17 (vì prefix "Phạm_Văn_Đồng là" dài bằng "Phạm Văn Đồng là")
+#         answer_text  từ "thủ tướng" → "thủ_tướng" (cập nhật compound)
+```
+
+Cơ chế bước 1:
+```
+ctx_seg[17:17+9] = "thủ_tướng"
+"thủ_tướng".replace("_", " ") = "thủ tướng"  # trùng ans_text → OK
+```
+
+**Ví dụ 2 — vị trí thay đổi (tokenizer thêm khoảng cách giữa số và chữ):**
+
+Input:
+```python
+ctx_orig = ["Đội số1 thủ tướng"]               # length 17
+ctx_seg  = ["Đội số 1 thủ_tướng"]              # length 18 (thêm space sau "số")
+answers  = [{"text": ["thủ tướng"], "answer_start": [8]}]
+
+validate_answer_in_segmented(ctx_orig, ctx_seg, answers)
+```
+
+Ouput (mutate answers):
+```python
+answers  = [{"text": ["thủ_tướng"], "answer_start": [9]}]
+#         answer_start 8 → 9  (do "số1" → "số 1" dài hơn 1 ký tự ⇒ prefix "Đội số" dài thêm 1)
+#         answer_text  "thủ tướng" → "thủ_tướng"
 ```
 
 ---
