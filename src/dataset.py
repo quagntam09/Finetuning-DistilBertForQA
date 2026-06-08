@@ -6,6 +6,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 try:
     from .vietnamese import (
+        has_question_word,
         has_vietnamese,
         is_quality_sample,
         normalize_text,
@@ -14,6 +15,7 @@ try:
     )
 except ImportError:
     from vietnamese import (
+        has_question_word,
         has_vietnamese,
         is_quality_sample,
         normalize_text,
@@ -33,18 +35,29 @@ def filter_qa_dataset(
     question_column: str,
     context_column: str,
     answers_column: str,
+    language_column: str = "language",
+    filter_question_word: bool = True,
 ) -> "Dataset":
     """Remove low-quality QA samples from a HuggingFace ``Dataset``.
 
-    Applies :func:`is_quality_sample` per-row and filters out rows that fail.
+    Applies two filters per row:
+      1. :func:`is_quality_sample` — answer quality (length, match context)
+      2. :func:`has_question_word` — question must contain a question word
+
     Returns a new ``Dataset`` with the same schema (fewer rows).
     """
 
     def _filter_row(row) -> bool:
         q = normalize_text(row[question_column])
         c = normalize_text(row[context_column])
+        lang = row.get(language_column) if isinstance(row, dict) else row[language_column]
         ans = row.get(answers_column) if isinstance(row, dict) else row[answers_column]
-        return is_quality_sample(c, q, ans)
+
+        if not is_quality_sample(c, ans):
+            return False
+        if filter_question_word and not has_question_word(q, lang):
+            return False
+        return True
 
     n_before = len(dataset)
     filtered = dataset.filter(_filter_row, batched=False)
@@ -52,7 +65,7 @@ def filter_qa_dataset(
     removed = n_before - n_after
     if removed:
         logger.info(
-            "Quality filter removed %d / %d samples (%.1f%%)",
+            "Filter removed %d / %d samples (%.1f%%)",
             removed, n_before, 100 * removed / n_before,
         )
     return filtered

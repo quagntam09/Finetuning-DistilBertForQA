@@ -18,7 +18,7 @@ _NOISE_PATTERNS = re.compile(
 
 # Answer quality thresholds
 _MIN_ANSWER_LENGTH = 2
-_MAX_ANSWER_LENGTH = 150
+_MAX_ANSWER_LENGTH = 9999  # QA predicts start/end positions, length is irrelevant
 
 
 def normalize_text(text: str) -> str:
@@ -128,6 +128,112 @@ def validate_answer_in_segmented(
         else:
             # Cannot locate answer – mark as impossible later
             logger.debug("Answer not found in segmented context: %r", ans_text)
+
+
+# ── Question word detection ──────────────────────
+# Individual question words for frequency counting
+_EN_QWORDS_LIST = [
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "why",
+    "how",
+]
+
+_VI_QWORDS_LIST = [
+    # Person
+    "ai",
+    "ai là",
+    "người nào",
+
+    # Thing
+    "gì",
+    "cái gì",
+    "điều gì",
+
+    # Place
+    "đâu",
+    "ở đâu",
+    "nơi nào",
+    "ở nơi nào",
+
+    # Time
+    "khi nào",
+    "bao giờ",
+    "lúc nào",
+    "mấy giờ",
+
+    # Reason
+    "tại sao",
+    "vì sao",
+    "do đâu",
+
+    # Method
+    "sao",
+    "thế nào",
+    "như thế nào",
+    "làm sao",
+    "làm thế nào",
+    "bằng cách nào",
+
+    # Quantity
+    "bao nhiêu",
+    "bao lâu",
+    "mấy",
+
+    # Choice
+    "nào",
+]
+
+_EN_QWORDS_PATTERN = re.compile(
+    r"(?<![a-z])("
+    r"what|when|where|which|who|whom|whose"
+    r"|why|how"
+    r")(?![a-z])",
+    re.IGNORECASE,
+)
+
+_VI_QWORDS_PATTERN = re.compile(
+    r"(?<![a-zà-ỹ])("
+    r"ai là|người nào|ai"
+    r"|cái gì|điều gì|gì"
+    r"|ở nơi nào|nơi nào|ở đâu|đâu"
+    r"|khi nào|bao giờ|lúc nào|mấy giờ"
+    r"|tại sao|vì sao|do đâu"
+    r"|bằng cách nào|làm thế nào|như thế nào|làm sao|thế nào|sao"
+    r"|bao nhiêu|bao lâu|mấy"
+    r"|nào"
+    r")(?![a-zà-ỹ])",
+    re.IGNORECASE,
+)
+
+def has_question_word(question: str, language: str) -> bool:
+    """Check if a question contains at least one question word."""
+    if language == "vi":
+        return bool(_VI_QWORDS_PATTERN.search(question))
+    return bool(_EN_QWORDS_PATTERN.search(question))
+
+
+def get_question_words(question: str, language: str) -> list[str]:
+    """Return unique question words found in the question, deduplicated by span overlap."""
+    pattern = _VI_QWORDS_PATTERN if language == "vi" else _EN_QWORDS_PATTERN
+    seen_words: set[str] = set()
+    covered: set[int] = set()
+    result: list[str] = []
+    for m in pattern.finditer(question):
+        # Skip if any character position is already covered by a longer match
+        if any(pos in covered for pos in range(m.start(), m.end())):
+            continue
+        w = m.group(1).lower()
+        if w not in seen_words:
+            seen_words.add(w)
+            result.append(w)
+            covered.update(range(m.start(), m.end()))
+    return result
 
 
 def has_vietnamese(examples: dict[str, list], language_column: str = "language") -> bool:

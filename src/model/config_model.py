@@ -26,6 +26,7 @@ class Config:
             if profile_name not in profiles:
                 raise ValueError(f"Unknown profile: {profile_name}")
             config.update(profiles[profile_name])
+            config["profile_name"] = profile_name
         else:
             config = data
 

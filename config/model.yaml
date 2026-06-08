@@ -37,6 +37,8 @@ defaults:
   best_metric: f1
   load_best_model: true
 
+  generate_eda: true
+  eda_output_dir: outputs/eda
   output_dir: outputs/checkpoints
   artifact_dir: artifacts/readers/run_best
   artifact_name: run_best

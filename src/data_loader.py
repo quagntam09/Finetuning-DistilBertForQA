@@ -1,9 +1,7 @@
 """
 Data loading utilities for QA datasets.
 
-Chỉ hỗ trợ tải từ local JSONL files trong folder data/.
-
-Hỗ trợ preprocessing với prepare_train_features/prepare_eval_features.
+Loads pre-filtered JSONL files from output/filtered/ (falls back to raw data/).
 """
 
 from __future__ import annotations
@@ -13,7 +11,7 @@ import logging
 
 from datasets import DatasetDict, load_dataset
 
-from .dataset import filter_qa_dataset, prepare_train_features, prepare_eval_features
+from .dataset import prepare_train_features, prepare_eval_features
 
 
 logger = logging.getLogger(__name__)
@@ -21,19 +19,40 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
+_FILTERED_DIRS: dict[str, Path] = {
+    "data_en": PROJECT_ROOT / "outputs" / "filtered_en",
+    "data_vi": PROJECT_ROOT / "outputs" / "filtered_vi",
+}
+
+
+def _resolve_filtered(raw_path: str) -> str | None:
+    """Map raw path → filtered path using language-specific subfolder.
+
+    data/data_en/train.jsonl  → outputs/filtered_en/data_en_train_filtered.jsonl
+    data/data_vi/validation.jsonl → outputs/filtered_vi/data_vi_validation_filtered.jsonl
+    """
+    p = Path(raw_path)
+    try:
+        rel = p.relative_to(DATA_DIR)
+    except ValueError:
+        return None
+    parts = rel.parts
+    if not parts:
+        return None
+    base_dir = _FILTERED_DIRS.get(parts[0])
+    if base_dir is None:
+        return None
+    name = rel.with_suffix("").as_posix().replace("/", "_") + "_filtered"
+    candidate = base_dir / f"{name}.jsonl"
+    if candidate.exists():
+        return str(candidate)
+    return None
+
 
 def load_raw_datasets(config) -> DatasetDict:
     """
-    Tải dataset QA từ local JSONL files trong folder data/.
-
-    Dựa vào config.train_file, config.validation_file, config.test_file
-    (đường dẫn tương đối tới thư mục data/ hoặc tuyệt đối).
-
-    Args:
-        config: TrainingConfig object với các tham số dataset
-
-    Returns:
-        DatasetDict với splits "train", "validation", "test" (tùy khả dụng)
+    Tải dataset QA từ local JSONL files.
+    Ưu tiên bản filtered trong output/filtered/, fallback về raw data/.
     """
 
     def _resolve(path: str | None) -> str | None:
@@ -41,6 +60,12 @@ def load_raw_datasets(config) -> DatasetDict:
             return None
         p = Path(path).expanduser()
         candidates = [p] if p.is_absolute() else [PROJECT_ROOT / p, DATA_DIR / p]
+
+        # Prefer filtered version
+        for candidate in candidates:
+            filtered = _resolve_filtered(str(candidate))
+            if filtered:
+                return filtered
 
         for candidate in candidates:
             if candidate.exists():
@@ -54,22 +79,23 @@ def load_raw_datasets(config) -> DatasetDict:
     train = _resolve(config.train_file)
     if train:
         data_files["train"] = train
-        print(f"Load train data from: {train}")
 
     validation = _resolve(config.validation_file)
     if validation:
         data_files["validation"] = validation
-        print(f"Load validation data from: {validation}")
 
     test = _resolve(config.test_file)
     if test:
         data_files["test"] = test
-        print(f"Load test data from: {test}")
 
     if not data_files:
         raise ValueError(
             "Cần cung cấp ít nhất một trong: train_file, validation_file, test_file"
         )
+
+    for split, fp in data_files.items():
+        label = "(filtered)" if "filtered" in fp else "(raw)"
+        print(f"  Load {split}: {fp} {label}")
 
     logger.info(f"Loading local dataset từ files: {list(data_files.keys())}")
 
@@ -102,18 +128,8 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
     for split_name, dataset in raw_datasets.items():
         logger.info(f"Processing split '{split_name}' ({len(dataset)} samples)")
 
-        # Chọn hàm xử lý tùy theo split
         has_answers = config.answers_column in dataset.column_names
         has_context_labels = split_name in {"train", "validation"} and has_answers
-
-        # Quality filter (remove noisy samples)
-        if has_context_labels:
-            dataset = filter_qa_dataset(
-                dataset=dataset,
-                question_column=config.question_column,
-                context_column=config.context_column,
-                answers_column=config.answers_column,
-            )
 
         if has_context_labels:
             prepare_fn = prepare_train_features
