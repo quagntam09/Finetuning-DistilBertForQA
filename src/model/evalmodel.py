@@ -537,9 +537,9 @@ def evaluate_on_viquad_test(
     raw_examples = [hf_ds[i] for i in range(len(hf_ds))]
     print(f"  Số mẫu test: {len(raw_examples)}")
 
-    # Kiểm tra ground truth có không
+    # Kiểm tra ground truth có không (duyệt toàn bộ dataset, dừng sớm nếu tìm thấy)
     has_answers = any(
-        ex.get("answers", {}).get("text") for ex in raw_examples[:10]
+        ex.get("answers", {}).get("text") for ex in raw_examples
     )
 
     # Tokenize
