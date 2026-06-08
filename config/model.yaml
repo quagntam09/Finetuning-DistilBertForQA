@@ -76,7 +76,7 @@ profiles:
   train_en:
     train_file: data/stage1_en_train.jsonl
     validation_file: data/stage1_en_validation.jsonl
-    epochs: 2
+    epochs: 5
     learning_rate: 3.0e-5
     output_dir: outputs/checkpoints_en
     artifact_dir: artifacts/readers/en

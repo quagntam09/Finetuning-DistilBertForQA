@@ -1,4 +1,7 @@
 .venv
 __pycache__/
 *.pyc
-*.pyc
+outputs/checkpoints_*/checkpoint_epoch_*/
+outputs/checkpoints_*/last_checkpoint/
+/.pt
+training_state.pt
