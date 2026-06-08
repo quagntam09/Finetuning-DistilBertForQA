@@ -202,7 +202,8 @@ class QATrainer:
             f"Loaded model weights from {self.init_checkpoint_dir} "
             f"(checkpoint epoch={state.get('epoch')})"
         )
-        if load_optimizer_state and state.get("history"):
+        # Always restore history when present, independent of optimizer state loading
+        if state.get("history"):
             self.history = state["history"]
         return state
 
