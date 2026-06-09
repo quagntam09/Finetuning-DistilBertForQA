@@ -1,41 +1,37 @@
 import torch.nn as nn
 from transformers import DistilBertModel
-from peft import LoraConfig, get_peft_model
+
 from config_model import Config
 
 
-class CustomLoraDistilBertQA(nn.Module):
+class CustomDistilBertQA(nn.Module):
+    """DistilBERT extractive QA model for full fine-tuning."""
+
     def __init__(self, config=None):
-        super(CustomLoraDistilBertQA, self).__init__()
+        super().__init__()
         self.config = config or Config.from_yaml()
-        self.basemodel = DistilBertModel.from_pretrained(self.config.model_name)
+        self.distilbert = DistilBertModel.from_pretrained(self.config.model_name)
 
-        lora_config = LoraConfig(
-            r=self.config.lora_r,
-            lora_alpha=self.config.lora_alpha,
-            lora_dropout=self.config.lora_dropout,
-            target_modules=self.config.lora_target_modules,
-            bias=self.config.lora_bias
-        )
-        self.distilbert_lora = get_peft_model(self.basemodel, lora_config)
+        if getattr(self.config, "freeze_encoder", False):
+            for param in self.distilbert.parameters():
+                param.requires_grad = False
 
+        hidden_size = self.distilbert.config.hidden_size
         self.dropout = nn.Dropout(self.config.dropout_rate)
-        self.relu = nn.ReLU()
-
-        self.qa_outputs = nn.Linear(self.basemodel.config.hidden_size, 2)
+        self.qa_outputs = nn.Linear(hidden_size, 2)
 
     def forward(self, input_ids, attention_mask):
-        outputs = self.distilbert_lora(input_ids = input_ids, attention_mask = attention_mask)
-        hidden_state = outputs[0]
-
-        x = self.dropout(hidden_state)
-        x = self.relu(x)
-        logits = self.qa_outputs(x)
-
+        outputs = self.distilbert(input_ids=input_ids, attention_mask=attention_mask)
+        hidden_state = outputs.last_hidden_state
+        logits = self.qa_outputs(self.dropout(hidden_state))
         start_logits, end_logits = logits.split(1, dim=-1)
         return start_logits.squeeze(-1), end_logits.squeeze(-1)
 
-# Hàm nhỏ để in ra số lượng tham số thực sự cần train
+
+# Backward-compatible alias for older scripts/imports.
+CustomLoraDistilBertQA = CustomDistilBertQA
+
+
 def print_trainable_parameters(model):
     trainable_params = 0
     all_param = 0
@@ -43,8 +39,14 @@ def print_trainable_parameters(model):
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
-    print(f"Tham số Trainable: {trainable_params:,} || Tổng tham số: {all_param:,} || Tỉ lệ: {100 * trainable_params / all_param:.2f}%")
+    ratio = 100 * trainable_params / all_param if all_param else 0.0
+    print(
+        f"Tham số Trainable: {trainable_params:,} || "
+        f"Tổng tham số: {all_param:,} || "
+        f"Tỉ lệ: {ratio:.2f}%"
+    )
+
 
 if __name__ == "__main__":
-    model = CustomLoraDistilBertQA()
+    model = CustomDistilBertQA()
     print_trainable_parameters(model)

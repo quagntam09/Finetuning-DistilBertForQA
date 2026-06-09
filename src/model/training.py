@@ -22,7 +22,7 @@ from evalmodel import (
     plot_loss_curves,
     qa_eval_collate,
 )
-from loadmodel import CustomLoraDistilBertQA
+from loadmodel import CustomDistilBertQA
 from src.data_loader import build_qa_datasets, load_raw_datasets, prepare_metric_raw_examples
 
 def save_checkpoint(
@@ -261,7 +261,14 @@ def load_checkpoint(
         raise FileNotFoundError(f"Checkpoint not found: {state_path}")
 
     state = torch.load(state_path, map_location=map_location, weights_only=False)
-    model.load_state_dict(state["model_state_dict"])
+    try:
+        model.load_state_dict(state["model_state_dict"])
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Checkpoint architecture mismatch. If this checkpoint was trained "
+            "with the old LoRA model, retrain the source checkpoint with the "
+            "current full fine-tune model before using it for transfer."
+        ) from exc
 
     if load_optimizer_state and optimizer is not None:
         optimizer.load_state_dict(state["optimizer_state_dict"])
@@ -286,7 +293,8 @@ class QATrainer:
                 getattr(self.config, "use_tf32", False)
             )
         self.use_amp = self.device == "cuda" and bool(getattr(self.config, "use_amp", False))
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.amp_device_type = "cuda" if self.device == "cuda" else "cpu"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
         self.tokenizer = None
         self.train_loader = None
         self.val_loader = None
@@ -425,7 +433,7 @@ class QATrainer:
         )
 
     def setup_model(self):
-        self.model = CustomLoraDistilBertQA(self.config).to(self.device)
+        self.model = CustomDistilBertQA(self.config).to(self.device)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -490,7 +498,7 @@ class QATrainer:
             start_positions = batch["start_positions"].to(self.device)
             end_positions = batch["end_positions"].to(self.device)
 
-            with torch.cuda.amp.autocast(enabled=self.use_amp):
+            with torch.amp.autocast(self.amp_device_type, enabled=self.use_amp):
                 start_logits, end_logits = self.model(input_ids, attention_mask)
                 start_loss = self.loss_fn(start_logits, start_positions)
                 end_loss = self.loss_fn(end_logits, end_positions)

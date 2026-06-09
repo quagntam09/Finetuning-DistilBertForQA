@@ -208,6 +208,7 @@ def prepare_eval_features(
     padding: str,
     use_vietnamese_segmentation: bool = True,
     segmentation_tool: str | None = "underthesea",
+    example_indices: list[int] | None = None,
 ) -> dict[str, list]:
     questions = [normalize_text(q) for q in examples[question_column]]
     contexts = [normalize_text(c) for c in examples[context_column]]
@@ -238,7 +239,10 @@ def prepare_eval_features(
     tokenized["sample_id"] = []
     for i in range(len(tokenized["input_ids"])):
         sample_idx = sample_mapping[i]
-        tokenized["sample_id"].append(sample_idx)
+        if example_indices is None:
+            tokenized["sample_id"].append(sample_idx)
+        else:
+            tokenized["sample_id"].append(example_indices[sample_idx])
 
         sequence_ids = tokenized.sequence_ids(i)
         context_start = 0

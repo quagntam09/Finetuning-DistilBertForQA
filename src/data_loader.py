@@ -169,23 +169,44 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
             prepare_kwargs = {}
 
         # Tokenize
-        processed_dataset = dataset.map(
-            lambda examples: prepare_fn(
-                examples=examples,
-                tokenizer=tokenizer,
-                question_column=config.question_column,
-                context_column=config.context_column,
-                max_length=config.max_length,
-                doc_stride=config.doc_stride,
-                padding=config.padding,
-                use_vietnamese_segmentation=config.use_vietnamese_segmentation,
-                segmentation_tool=config.segmentation_tool,
-                **prepare_kwargs,
-            ),
-            batched=True,
-            remove_columns=dataset.column_names,
-            desc=f"Tokenizing {split_name}",
-        )
+        if has_context_labels:
+            processed_dataset = dataset.map(
+                lambda examples: prepare_fn(
+                    examples=examples,
+                    tokenizer=tokenizer,
+                    question_column=config.question_column,
+                    context_column=config.context_column,
+                    max_length=config.max_length,
+                    doc_stride=config.doc_stride,
+                    padding=config.padding,
+                    use_vietnamese_segmentation=config.use_vietnamese_segmentation,
+                    segmentation_tool=config.segmentation_tool,
+                    **prepare_kwargs,
+                ),
+                batched=True,
+                remove_columns=dataset.column_names,
+                desc=f"Tokenizing {split_name}",
+            )
+        else:
+            processed_dataset = dataset.map(
+                lambda examples, indices: prepare_fn(
+                    examples=examples,
+                    tokenizer=tokenizer,
+                    question_column=config.question_column,
+                    context_column=config.context_column,
+                    max_length=config.max_length,
+                    doc_stride=config.doc_stride,
+                    padding=config.padding,
+                    use_vietnamese_segmentation=config.use_vietnamese_segmentation,
+                    segmentation_tool=config.segmentation_tool,
+                    example_indices=indices,
+                    **prepare_kwargs,
+                ),
+                batched=True,
+                with_indices=True,
+                remove_columns=dataset.column_names,
+                desc=f"Tokenizing {split_name}",
+            )
 
         # Set PyTorch format
         if has_context_labels:

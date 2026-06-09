@@ -55,12 +55,6 @@ defaults:
   logging_steps: 100
   log_level: info
 
-  lora_r: 8
-  lora_alpha: 16
-  lora_target_modules: ["q_lin", "v_lin", "k_lin", "out_lin"]
-  lora_dropout: 0.05
-  lora_bias: "none"
-
 default_profile: train_vi
 default_pipeline_profiles:
   - train_en
