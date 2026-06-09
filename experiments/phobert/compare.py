@@ -14,10 +14,10 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from config_model import Config
-from evalmodel import evaluate_qa_metrics, plot_compare_checkpoints
+from evalmodel import evaluate_qa_metrics, plot_compare_checkpoints, qa_eval_collate
 from experiments.phobert.modeling import PhoBertLoraQA
 from loadmodel import CustomLoraDistilBertQA
-from src.data_loader import build_qa_datasets
+from src.data_loader import build_qa_datasets, prepare_metric_raw_examples
 
 
 def load_checkpoint_config(checkpoint_dir):
@@ -63,17 +63,31 @@ def evaluate_checkpoint(checkpoint_dir, device):
     if eval_split is None:
         raise RuntimeError(f"No validation/test split for {checkpoint_dir}")
 
-    eval_loader = DataLoader(eval_split, batch_size=config.batch_size, shuffle=False, num_workers=0)
-    raw_examples = load_raw_examples(config)
+    eval_loader = DataLoader(
+        eval_split,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=qa_eval_collate,
+    )
+    raw_examples = prepare_metric_raw_examples(load_raw_examples(config), config)
 
     model = build_model(config).to(device)
     state_path = checkpoint_dir / "training_state.pt"
     if not state_path.exists():
         raise FileNotFoundError(f"Missing checkpoint state: {state_path}")
-    state = torch.load(state_path, map_location=device)
+    state = torch.load(state_path, map_location=device, weights_only=False)
     model.load_state_dict(state["model_state_dict"])
 
-    metrics = evaluate_qa_metrics(model, eval_loader, tokenizer, raw_examples, device)
+    metrics = evaluate_qa_metrics(
+        model,
+        eval_loader,
+        tokenizer,
+        raw_examples,
+        device,
+        no_answer_threshold=float(getattr(config, "no_answer_threshold", 0.0)),
+        tune_no_answer_threshold=bool(getattr(config, "tune_no_answer_threshold", False)),
+    )
     return config, metrics
 
 

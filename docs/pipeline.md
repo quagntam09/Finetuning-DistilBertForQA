@@ -3,19 +3,19 @@
 ## Kiến trúc tổng quan
 
 ```
-data/*.jsonl (raw)
+data/data_en/*.jsonl, data/data_vi/*.jsonl (raw)
     │
     ▼
 filter_pipeline.py  ──gọi──►  vietnamese.py (is_quality_sample, has_question_word)
     │                           ▲
     ▼                           │
-output/filtered/*_filtered.jsonl ── tự sinh EDA console
+data/filtered_*/*_filtered.jsonl ── tự sinh EDA console/charts
     │
     ▼
 data_loader.py::build_qa_datasets()
     │
     ├─ load_raw_datasets()
-    │   └─ _resolve_filtered() → ưu tiên output/filtered/, fallback data/
+    │   └─ _resolve_filtered() → ưu tiên data/filtered_*/, fallback raw data/
     │
     └─ dataset.map(prepare_train/eval_features)
          └─ vietnamese.py (normalize_text, segment_texts)
@@ -38,7 +38,7 @@ data_loader.py::build_qa_datasets()
 
 | Function | Output | Ghi chú |
 |---|---|---|
-| `run_pipeline(path)` | filtered JSONL + console EDA | Đọc raw → filter quality + qword → save |
+| `run_pipeline(path)` | filtered JSONL + console EDA | Đọc raw → filter quality → save |
 | `_compute_stats(rows)` | dict | answer_len, context_len, question_len, impossible, qword coverage |
 | `print_stats(before, after)` | console table | So sánh Before/After cho từng dataset |
 
@@ -67,14 +67,14 @@ Chạy: `python src/filter_pipeline.py`
 python src/filter_pipeline.py
 
 # Bước 2: Train (data_loader tự động dùng file filtered)
-python src/model/train.py
+python src/model/training.py --profile train_vi
 ```
 
 ## Lưu ý
 
 - **Chỉ xử lý `data/data_en/` và `data/data_vi/`** — bỏ qua stage*, eval* trong thư mục data/.
 - `data_loader.py` không còn gọi `filter_qa_dataset()` — filter tách riêng.
-- `output/filtered/` là single source of truth cho training.
-- Nếu chưa chạy filter, data_loader fallback về raw (có warning).
-- `is_quality_sample` chỉ lọc answer <2 ký tự hoặc không khớp context (bỏ giới hạn độ dài tối đa).
-- `config/model.yaml` giữ nguyên profiles cũ (stage*, eval*).
+- `data/filtered_en/` và `data/filtered_vi/` là source chính cho training.
+- Nếu profile trỏ raw path `data/data_*/*.jsonl`, data_loader sẽ ưu tiên file filtered tương ứng nếu tồn tại; nếu profile trỏ thẳng `data/filtered_*`, nó load đúng file đó.
+- `is_quality_sample` lọc answer quá ngắn, không khớp context, hoặc bị cắt giữa token/từ.
+- Question words hiện chỉ dùng cho thống kê EDA và question-group sampler, không dùng để loại mẫu trong `filter_pipeline.py`.

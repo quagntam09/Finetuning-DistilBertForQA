@@ -1,7 +1,7 @@
 """
 Data loading utilities for QA datasets.
 
-Loads pre-filtered JSONL files from output/filtered/ (falls back to raw data/).
+Loads pre-filtered JSONL files from data/filtered_* (falls back to raw data).
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import logging
 from datasets import DatasetDict, load_dataset
 
 from .dataset import prepare_train_features, prepare_eval_features
+from .vietnamese import has_vietnamese, normalize_text, segment_texts, validate_answer_in_segmented
 
 
 logger = logging.getLogger(__name__)
@@ -20,16 +21,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 _FILTERED_DIRS: dict[str, Path] = {
-    "data_en": PROJECT_ROOT / "outputs" / "filtered_en",
-    "data_vi": PROJECT_ROOT / "outputs" / "filtered_vi",
+    "data_en": DATA_DIR / "filtered_en",
+    "data_vi": DATA_DIR / "filtered_vi",
 }
 
 
 def _resolve_filtered(raw_path: str) -> str | None:
     """Map raw path → filtered path using language-specific subfolder.
 
-    data/data_en/train.jsonl  → outputs/filtered_en/data_en_train_filtered.jsonl
-    data/data_vi/validation.jsonl → outputs/filtered_vi/data_vi_validation_filtered.jsonl
+    data/data_en/train.jsonl  → data/filtered_en/data_en_train_filtered.jsonl
+    data/data_vi/validation.jsonl → data/filtered_vi/data_vi_validation_filtered.jsonl
     """
     p = Path(raw_path)
     try:
@@ -52,7 +53,7 @@ def _resolve_filtered(raw_path: str) -> str | None:
 def load_raw_datasets(config) -> DatasetDict:
     """
     Tải dataset QA từ local JSONL files.
-    Ưu tiên bản filtered trong output/filtered/, fallback về raw data/.
+    Ưu tiên bản filtered trong data/filtered_*/, fallback về raw data/.
     """
 
     def _resolve(path: str | None) -> str | None:
@@ -100,6 +101,28 @@ def load_raw_datasets(config) -> DatasetDict:
     logger.info(f"Loading local dataset từ files: {list(data_files.keys())}")
 
     datasets = load_dataset(path="json", data_files=data_files, cache_dir=config.cache_dir)
+    if getattr(config, "answer_only", False):
+        answers_column = getattr(config, "answers_column", "answers")
+        impossible_column = getattr(config, "impossible_column", "is_impossible")
+
+        def _has_answer(row):
+            answers = row.get(answers_column) or {}
+            texts = answers.get("text") or []
+            starts = answers.get("answer_start") or []
+            return (
+                not row.get(impossible_column, False)
+                and any(str(text).strip() for text in texts)
+                and bool(starts)
+            )
+
+        before_counts = {split: len(dataset) for split, dataset in datasets.items()}
+        datasets = datasets.filter(_has_answer, desc="Filtering answer-only QA samples")
+        after_counts = {split: len(dataset) for split, dataset in datasets.items()}
+        for split in datasets:
+            print(
+                f"  Answer-only {split}: "
+                f"{before_counts[split]:,} -> {after_counts[split]:,}"
+            )
 
     logger.info(f"Loaded splits: {list(datasets.keys())}")
     return datasets
@@ -129,7 +152,11 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
         logger.info(f"Processing split '{split_name}' ({len(dataset)} samples)")
 
         has_answers = config.answers_column in dataset.column_names
-        has_context_labels = split_name in {"train", "validation"} and has_answers
+        has_context_labels = (
+            is_training
+            and split_name in {"train", "validation"}
+            and has_answers
+        )
 
         if has_context_labels:
             prepare_fn = prepare_train_features
@@ -188,6 +215,42 @@ def build_qa_datasets(tokenizer, config, is_training: bool = True) -> DatasetDic
         logger.info(f"  → {len(processed_dataset)} features after tokenization")
 
     return processed
+
+
+def prepare_metric_raw_examples(rows: list[dict], config) -> list[dict]:
+    """Mirror eval preprocessing for raw examples used by QA metric post-processing."""
+    examples = [dict(row) for row in rows]
+    if not examples:
+        return examples
+
+    questions = [normalize_text(row.get(config.question_column, "")) for row in examples]
+    contexts = [normalize_text(row.get(config.context_column, "")) for row in examples]
+    answers = [
+        {
+            "text": list((row.get(config.answers_column) or {}).get("text") or []),
+            "answer_start": list((row.get(config.answers_column) or {}).get("answer_start") or []),
+        }
+        for row in examples
+    ]
+
+    batch = {
+        config.question_column: questions,
+        config.context_column: contexts,
+        "language": [row.get("language") for row in examples],
+    }
+    if getattr(config, "use_vietnamese_segmentation", True) and has_vietnamese(batch):
+        contexts_orig = list(contexts)
+        questions = segment_texts(questions)
+        contexts = segment_texts(contexts)
+        validate_answer_in_segmented(contexts_orig, contexts, answers)
+
+    for row, question, context, answer in zip(examples, questions, contexts, answers):
+        row[config.question_column] = question
+        row[config.context_column] = context
+        if config.answers_column in row:
+            row[config.answers_column] = answer
+
+    return examples
 
 
 def load_dataset_for_inference(

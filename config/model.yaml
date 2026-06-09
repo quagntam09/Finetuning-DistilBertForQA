@@ -21,6 +21,8 @@ defaults:
   weight_decay: 0.01
   use_question_group_sampler: true
   question_group_sampling_power: 0.5
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.001
   warmup_ratio: 0.1
   max_grad_norm: 1.0
   gradient_accumulation_steps: 1
@@ -35,6 +37,10 @@ defaults:
 
   eval_strategy: epoch
   save_strategy: epoch
+  track_eval_metrics: true
+  tune_no_answer_threshold: true
+  no_answer_threshold: 0.0
+  answer_only: false
   save_best_model: true
   best_metric: f1
   load_best_model: true
@@ -63,7 +69,7 @@ profiles:
   train_vi:
     train_file: data/filtered_vi/data_vi_train_filtered.jsonl
     validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
-    epochs: 5
+    epochs: 10
     learning_rate: 1.0e-5
     output_dir: outputs/checkpoints_vi
     artifact_dir: artifacts/readers/vi
@@ -72,8 +78,8 @@ profiles:
   train_en:
     train_file: data/filtered_en/data_en_train_filtered.jsonl
     validation_file: data/filtered_en/data_en_validation_filtered.jsonl
-    epochs: 5
-    learning_rate: 3.0e-5
+    epochs: 3
+    learning_rate: 1.0e-5
     output_dir: outputs/checkpoints_en
     artifact_dir: artifacts/readers/en
     artifact_name: en
@@ -94,6 +100,51 @@ profiles:
     init_checkpoint_dir: outputs/checkpoints_en/best_model
     train_file: data/filtered_vi/data_vi_train_filtered.jsonl
     validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
-    epochs: 5
+    epochs: 7
     learning_rate: 1.0e-5
     output_dir: outputs/checkpoints_vi_from_en
+
+  train_vi_from_en_answer_only:
+    init_checkpoint_dir: outputs/checkpoints_en/best_model
+    train_file: data/filtered_vi/data_vi_train_filtered.jsonl
+    validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
+    epochs: 2
+    learning_rate: 1.0e-5
+    answer_only: true
+    tune_no_answer_threshold: false
+    no_answer_threshold: -1000000000.0
+    output_dir: outputs/checkpoints_vi_from_en_answer_only
+
+  train_vi_answer_only:
+    train_file: data/filtered_vi/data_vi_train_filtered.jsonl
+    validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
+    epochs: 2
+    learning_rate: 1.0e-5
+    answer_only: true
+    tune_no_answer_threshold: false
+    no_answer_threshold: -1000000000.0
+    output_dir: outputs/checkpoints_vi_answer_only
+
+  train_en_from_vi:
+    init_checkpoint_dir: outputs/checkpoints_vi/best_model
+    train_file: data/filtered_en/data_en_train_filtered.jsonl
+    validation_file: data/filtered_en/data_en_validation_filtered.jsonl
+    epochs: 5
+    learning_rate: 3.0e-5
+    output_dir: outputs/checkpoints_en_from_vi
+
+  eval_vi_test:
+    test_file: data/filtered_vi/data_vi_test_filtered.jsonl
+    output_dir: outputs/eval_vi_test
+    artifact_dir: artifacts/readers/eval_vi_test
+    artifact_name: eval_vi_test
+
+  train_en_from_vi_eval_vi:
+    init_checkpoint_dir: outputs/checkpoints_vi/best_model
+    train_file: data/filtered_en/data_en_train_filtered.jsonl
+    validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
+    epochs: 5
+    learning_rate: 3.0e-5
+    output_dir: outputs/checkpoints_en_from_vi_eval_vi
+    artifact_dir: artifacts/readers/en_from_vi_eval_vi
+    artifact_name: en_from_vi_eval_vi

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase
 
 try:
     from .vietnamese import (
@@ -171,7 +171,7 @@ def prepare_train_features(
             while sequence_ids[context_end] != 1:
                 context_end -= 1
 
-            if offsets[context_start][0] > answer_end_char or offsets[context_end][1] < answer_start_char:
+            if offsets[context_start][0] > answer_start_char or offsets[context_end][1] < answer_end_char:
                 start_positions.append(cls_index)
                 end_positions.append(cls_index)
             else:

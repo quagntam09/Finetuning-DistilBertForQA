@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import json
 import sys
 from pathlib import Path
@@ -14,12 +15,18 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 
 from config_model import Config
 from experiments.phobert.modeling import PhoBertLoraQA
-from evalmodel import evaluate_loss, plot_loss_curves
-from src.data_loader import build_qa_datasets
+from evalmodel import (
+    evaluate_loss,
+    evaluate_qa_metrics,
+    plot_accuracy_f1_recall_per_epoch,
+    plot_loss_curves,
+    qa_eval_collate,
+)
+from src.data_loader import build_qa_datasets, load_raw_datasets, prepare_metric_raw_examples
 
 
 CONFIG_PATH = ROOT / "experiments" / "phobert" / "config.yaml"
@@ -54,6 +61,15 @@ def save_checkpoint(checkpoint_dir, model, optimizer, tokenizer, config, epoch, 
     save_history(history, checkpoint_dir)
 
 
+def _config_with_threshold(config, metrics):
+    if not metrics or "no_answer_threshold" not in metrics:
+        return config
+    checkpoint_config = copy.copy(config)
+    checkpoint_config.no_answer_threshold = float(metrics["no_answer_threshold"])
+    checkpoint_config.tune_no_answer_threshold = False
+    return checkpoint_config
+
+
 class PhoBertTrainer:
     def __init__(self, profile_name):
         self.profile_name = profile_name
@@ -62,10 +78,14 @@ class PhoBertTrainer:
         self.tokenizer = None
         self.train_loader = None
         self.val_loader = None
+        self.metric_eval_loader = None
+        self.metric_raw_examples = []
         self.model = None
         self.optimizer = None
+        self.scheduler = None
         self.loss_fn = nn.CrossEntropyLoss()
         self.best_val_loss = float("inf")
+        self.best_metric_score = None
         self.history = {"train_loss": [], "val_loss": []}
 
     @property
@@ -100,7 +120,37 @@ class PhoBertTrainer:
             sampler=train_sampler,
         )
         self.val_loader = DataLoader(datasets["validation"], batch_size=self.config.batch_size, shuffle=False)
+        self.setup_metric_eval_loader()
         return self.train_loader, self.val_loader
+
+    def setup_metric_eval_loader(self):
+        if not getattr(self.config, "track_eval_metrics", True):
+            return None
+        if not self.config.validation_file:
+            return None
+
+        eval_config = copy.copy(self.config)
+        eval_config.train_file = None
+        eval_config.test_file = None
+
+        raw_datasets = load_raw_datasets(eval_config)
+        if "validation" not in raw_datasets:
+            return None
+
+        self.metric_raw_examples = prepare_metric_raw_examples(
+            [dict(row) for row in raw_datasets["validation"]],
+            eval_config,
+        )
+        eval_datasets = build_qa_datasets(self.tokenizer, eval_config, is_training=False)
+        self.metric_eval_loader = DataLoader(
+            eval_datasets["validation"],
+            batch_size=self.config.batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=qa_eval_collate,
+        )
+        print(f"Metric eval enabled: {len(self.metric_raw_examples):,} validation samples")
+        return self.metric_eval_loader
 
     def _build_train_sampler(self, train_data):
         if not getattr(self.config, "use_question_group_sampler", False):
@@ -109,7 +159,7 @@ class PhoBertTrainer:
             print("Question-group sampler disabled: missing question_group column.")
             return None
 
-        groups = list(train_data["question_group"])
+        groups = list(train_data.with_format(None)["question_group"])
         counts = collections.Counter(groups)
         power = float(getattr(self.config, "question_group_sampling_power", 0.5))
         weights = torch.tensor(
@@ -125,7 +175,18 @@ class PhoBertTrainer:
 
     def setup_model(self):
         self.model = PhoBertLoraQA(self.config).to(self.device)
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.config.learning_rate,
+            weight_decay=float(getattr(self.config, "weight_decay", 0.0)),
+        )
+        total_steps = max(len(self.train_loader) * int(self.config.epochs), 1)
+        warmup_steps = int(total_steps * float(getattr(self.config, "warmup_ratio", 0.0)))
+        self.scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
         self.model.train()
         return self.model
 
@@ -151,7 +212,12 @@ class PhoBertTrainer:
                 + self.loss_fn(end_logits, end_positions)
             ) / 2
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                float(getattr(self.config, "max_grad_norm", 1.0)),
+            )
             self.optimizer.step()
+            self.scheduler.step()
 
             total_loss += loss.item()
             progress.set_postfix(loss=f"{loss.item():.4f}")
@@ -161,26 +227,60 @@ class PhoBertTrainer:
     def evaluate(self):
         return evaluate_loss(self.model, self.val_loader, self.loss_fn, self.device)
 
-    def save_best_if_needed(self, epoch_number, train_loss, val_loss):
-        if val_loss >= self.best_val_loss:
-            return
+    def evaluate_metrics(self):
+        if self.metric_eval_loader is None or not self.metric_raw_examples:
+            return {}
+        return evaluate_qa_metrics(
+            self.model,
+            self.metric_eval_loader,
+            self.tokenizer,
+            self.metric_raw_examples,
+            self.device,
+            no_answer_threshold=float(getattr(self.config, "no_answer_threshold", 0.0)),
+            tune_no_answer_threshold=bool(getattr(self.config, "tune_no_answer_threshold", False)),
+        )
 
-        self.best_val_loss = val_loss
+    def _best_metric_value(self, val_loss, metrics):
+        metric_name = getattr(self.config, "best_metric", "val_loss")
+        if metric_name in {"loss", "val_loss"}:
+            return "val_loss", val_loss, False
+        if metrics and metric_name in metrics:
+            return metric_name, float(metrics[metric_name]), True
+        return "val_loss", val_loss, False
+
+    def save_best_if_needed(self, epoch_number, train_loss, val_loss, metrics=None):
+        min_delta = float(getattr(self.config, "early_stopping_min_delta", 0.0))
+        metric_name, metric_value, higher_is_better = self._best_metric_value(val_loss, metrics)
+        if self.best_metric_score is None:
+            is_best = True
+        elif higher_is_better:
+            is_best = metric_value > self.best_metric_score + min_delta
+        else:
+            is_best = metric_value < self.best_metric_score - min_delta
+
+        if not is_best:
+            self.best_val_loss = min(self.best_val_loss, val_loss)
+            return False
+
+        self.best_metric_score = metric_value
+        self.best_val_loss = min(self.best_val_loss, val_loss)
         if getattr(self.config, "save_best_model", True):
             best_dir = self.output_dir / "best_model"
+            checkpoint_config = _config_with_threshold(self.config, metrics)
             save_checkpoint(
                 best_dir,
                 self.model,
                 self.optimizer,
                 self.tokenizer,
-                self.config,
+                checkpoint_config,
                 epoch_number,
                 train_loss,
                 val_loss,
                 self.best_val_loss,
                 self.history,
             )
-            print(f"Saved best model: {best_dir}")
+            print(f"Saved best model: {best_dir} ({metric_name}={metric_value:.4f})")
+        return True
 
     def train(self):
         if self.model is None:
@@ -192,17 +292,70 @@ class PhoBertTrainer:
         print(f"Validation file: {self.config.validation_file}")
         print(f"Output dir: {self.output_dir}")
 
+        patience = getattr(self.config, "early_stopping_patience", None)
+        patience = None if patience is None else int(patience)
+        no_improve_epochs = 0
+
         for epoch in range(self.config.epochs):
             train_loss = self.train_one_epoch(epoch)
             val_loss = self.evaluate()
+            metrics = self.evaluate_metrics()
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
+            if metrics:
+                self.history.setdefault("em", []).append(metrics["exact_match"])
+                self.history.setdefault("accuracy", []).append(metrics["accuracy"])
+                self.history.setdefault("precision", []).append(metrics["precision"])
+                self.history.setdefault("recall", []).append(metrics["recall"])
+                self.history.setdefault("f1", []).append(metrics["f1"])
+                self.history.setdefault("has_answer_f1", []).append(metrics["has_answer_f1"])
+                self.history.setdefault("no_answer_exact", []).append(metrics["no_answer_exact"])
+                self.history.setdefault("no_answer_threshold", []).append(metrics["no_answer_threshold"])
             save_history(self.history, self.output_dir)
-            print(f"Epoch {epoch + 1}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}")
-            self.save_best_if_needed(epoch + 1, train_loss, val_loss)
+            metric_text = ""
+            if metrics:
+                metric_text = (
+                    f", accuracy={metrics['accuracy']:.2f}%, "
+                    f"precision={metrics['precision']:.2f}%, "
+                    f"recall={metrics['recall']:.2f}%, "
+                    f"f1={metrics['f1']:.2f}%, "
+                    f"has_answer_f1={metrics['has_answer_f1']:.2f}%, "
+                    f"no_answer_exact={metrics['no_answer_exact']:.2f}%, "
+                    f"no_answer_threshold={metrics['no_answer_threshold']:.4f}"
+                )
+            print(f"Epoch {epoch + 1}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}{metric_text}")
+            improved = self.save_best_if_needed(epoch + 1, train_loss, val_loss, metrics)
+            if improved:
+                no_improve_epochs = 0
+            else:
+                no_improve_epochs += 1
+
+            if patience is not None and no_improve_epochs >= patience:
+                print(
+                    "Early stopping: "
+                    f"val_loss did not improve by at least "
+                    f"{float(getattr(self.config, 'early_stopping_min_delta', 0.0)):.6f} "
+                    f"for {patience} epoch(s)."
+                )
+                break
 
         plot_loss_curves(self.history["train_loss"], self.history["val_loss"], self.output_dir)
         plot_loss_curves(self.history["train_loss"], self.history["val_loss"], self.output_dir / "best_model")
+        if self.history.get("f1") and self.history.get("recall"):
+            plot_accuracy_f1_recall_per_epoch(
+                self.history.get("accuracy", self.history.get("em", [])),
+                self.history["f1"],
+                self.history["recall"],
+                self.output_dir,
+                precision_list=self.history.get("precision", []),
+            )
+            plot_accuracy_f1_recall_per_epoch(
+                self.history.get("accuracy", self.history.get("em", [])),
+                self.history["f1"],
+                self.history["recall"],
+                self.output_dir / "best_model",
+                precision_list=self.history.get("precision", []),
+            )
         return {
             "profile": self.profile_name,
             "model_name": self.config.model_name,

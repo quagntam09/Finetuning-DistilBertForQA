@@ -29,6 +29,22 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def _is_word_char(char: str) -> bool:
+    return char == "_" or char.isalnum()
+
+
+def _has_answer_boundaries(context: str, start: int, answer: str) -> bool:
+    end = start + len(answer)
+    if start < 0 or end > len(context):
+        return False
+
+    if start > 0 and _is_word_char(context[start - 1]) and _is_word_char(answer[0]):
+        return False
+    if end < len(context) and _is_word_char(context[end]) and _is_word_char(answer[-1]):
+        return False
+    return True
+
+
 def is_quality_sample(
     context: str,
     answer: dict | None,
@@ -43,17 +59,22 @@ def is_quality_sample(
     """
     if answer and answer.get("text") and answer["text"][0]:
         ans = answer["text"][0].strip()
-        ans_start = answer.get("answer_start", [None])[0]
+        answer_starts = answer.get("answer_start") or []
+        ans_start = answer_starts[0] if answer_starts else None
 
         if len(ans) < min_answer_len:
             return False
         if len(ans) > max_answer_len:
             return False
 
-        if ans_start is not None:
-            ctx_snippet = context[ans_start : ans_start + len(ans)]
-            if ctx_snippet != ans:
-                return False
+        if ans_start is None:
+            return False
+
+        ctx_snippet = context[ans_start : ans_start + len(ans)]
+        if ctx_snippet != ans:
+            return False
+        if not _has_answer_boundaries(context, ans_start, ans):
+            return False
     else:
         # No answer – that's fine (is_impossible samples are valid)
         pass
@@ -65,8 +86,9 @@ def segment_texts(texts: list[str]) -> list[str]:
     """Word-segment Vietnamese texts using underthesea (format='text').
 
     Compounds are joined with underscores (e.g. ``sinh_viên``, ``thành_phố``)
-    which helps the BERT tokenizer recognise word boundaries.
-    Character positions are preserved (underscore ↔ space, 1-to-1).
+    which helps the BERT tokenizer recognise word boundaries. The tokenizer may
+    also insert spaces around punctuation, so answer offsets must be remapped
+    after segmentation.
 
     Args:
         texts: List of Vietnamese sentences.
@@ -94,6 +116,81 @@ def segment_texts(texts: list[str]) -> list[str]:
     return result
 
 
+def _alignment_char(char: str) -> str:
+    """Canonical single-character key used to align original and segmented text."""
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFD", char).casefold()
+    return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+
+
+def _build_segmented_char_map(original: str, segmented: str) -> dict[int, int]:
+    """Map original character indexes to segmented character indexes.
+
+    Vietnamese word segmentation preserves the order of visible characters but
+    can replace spaces with underscores and insert spaces around punctuation.
+    For span alignment we therefore ignore spaces/underscores and match the
+    remaining characters in order.
+    """
+    mapping: dict[int, int] = {}
+    seg_idx = 0
+    seg_len = len(segmented)
+
+    for orig_idx, orig_char in enumerate(original):
+        if orig_char.isspace() or orig_char == "_":
+            continue
+
+        orig_key = _alignment_char(orig_char)
+        while seg_idx < seg_len and (segmented[seg_idx].isspace() or segmented[seg_idx] == "_"):
+            seg_idx += 1
+
+        while seg_idx < seg_len and _alignment_char(segmented[seg_idx]) != orig_key:
+            seg_idx += 1
+
+        if seg_idx >= seg_len:
+            break
+
+        mapping[orig_idx] = seg_idx
+        seg_idx += 1
+
+    return mapping
+
+
+def _remap_answer_to_segmented(
+    ctx_orig: str,
+    ctx_seg: str,
+    ans_text: str,
+    ans_start: int,
+) -> tuple[int, str] | None:
+    ans_end = ans_start + len(ans_text)
+    char_map = _build_segmented_char_map(ctx_orig, ctx_seg)
+
+    answer_char_indexes = [
+        idx
+        for idx in range(ans_start, min(ans_end, len(ctx_orig)))
+        if idx in char_map and not ctx_orig[idx].isspace() and ctx_orig[idx] != "_"
+    ]
+    if not answer_char_indexes:
+        return None
+
+    seg_start = char_map[answer_char_indexes[0]]
+    seg_end = char_map[answer_char_indexes[-1]] + 1
+    if seg_start >= seg_end:
+        return None
+
+    return seg_start, ctx_seg[seg_start:seg_end]
+
+
+def _correct_original_answer_start(ctx_orig: str, ans_text: str, ans_start: int) -> int:
+    if ctx_orig[ans_start : ans_start + len(ans_text)] == ans_text:
+        return ans_start
+
+    matches = [match.start() for match in re.finditer(re.escape(ans_text), ctx_orig)]
+    if not matches:
+        return ans_start
+    return min(matches, key=lambda start: abs(start - ans_start))
+
+
 def validate_answer_in_segmented(
     contexts_orig: list[str],
     contexts_seg: list[str],
@@ -105,22 +202,23 @@ def validate_answer_in_segmented(
     ``answer_text`` so they point to the correct location in the segmented
     context.
     """
-    import re
-
     for ctx_orig, ctx_seg, ans in zip(contexts_orig, contexts_seg, answers):
         if not ans or not ans.get("text") or not ans["text"][0]:
             continue
         ans_text = ans["text"][0]
+        if not ans.get("answer_start"):
+            continue
         ans_start = ans["answer_start"][0]
+        ans_start = _correct_original_answer_start(ctx_orig, ans_text, ans_start)
 
-        seg_region = ctx_seg[ans_start : ans_start + len(ans_text)]
-        if seg_region.replace("_", " ") == ans_text:
-            # Exact position match (common case: spaces → underscores 1:1)
-            ans["text"][0] = seg_region
+        remapped = _remap_answer_to_segmented(ctx_orig, ctx_seg, ans_text, ans_start)
+        if remapped is not None:
+            ans["answer_start"][0], ans["text"][0] = remapped
             continue
 
         # Fallback: search for the answer in the segmented context
-        pattern = re.escape(ans_text).replace(r"\ ", "[_ ]")
+        segmented_answer = segment_texts([ans_text])[0]
+        pattern = re.escape(segmented_answer).replace(r"\ ", r"\s+")
         match = re.search(pattern, ctx_seg)
         if match:
             ans["answer_start"][0] = match.start()
@@ -132,63 +230,6 @@ def validate_answer_in_segmented(
 
 # ── Question word detection ──────────────────────
 # Individual question words for frequency counting
-_EN_QWORDS_LIST = [
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "whom",
-    "whose",
-    "why",
-    "how",
-]
-
-_VI_QWORDS_LIST = [
-    # Person
-    "ai",
-    "ai là",
-    "người nào",
-
-    # Thing
-    "gì",
-    "cái gì",
-    "điều gì",
-
-    # Place
-    "đâu",
-    "ở đâu",
-    "nơi nào",
-    "ở nơi nào",
-
-    # Time
-    "khi nào",
-    "bao giờ",
-    "lúc nào",
-    "mấy giờ",
-
-    # Reason
-    "tại sao",
-    "vì sao",
-    "do đâu",
-
-    # Method
-    "sao",
-    "thế nào",
-    "như thế nào",
-    "làm sao",
-    "làm thế nào",
-    "bằng cách nào",
-
-    # Quantity
-    "bao nhiêu",
-    "bao lâu",
-    "mấy",
-
-    # Choice
-    "nào",
-]
-
 _EN_QWORDS_PATTERN = re.compile(
     r"(?<![a-z])("
     r"what|when|where|which|who|whom|whose"

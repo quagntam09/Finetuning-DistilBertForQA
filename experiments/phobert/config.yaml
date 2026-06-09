@@ -21,7 +21,13 @@ defaults:
   weight_decay: 0.01
   use_question_group_sampler: true
   question_group_sampling_power: 0.5
+  early_stopping_patience: 3
+  early_stopping_min_delta: 0.001
+  track_eval_metrics: true
+  tune_no_answer_threshold: true
+  no_answer_threshold: 0.0
   save_best_model: true
+  best_metric: f1
   force_cpu: false
 
   lora_r: 8

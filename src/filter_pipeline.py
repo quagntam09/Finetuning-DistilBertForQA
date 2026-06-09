@@ -1,5 +1,5 @@
 """
-Apply full filter pipeline to all datasets and save to outputs/filtered/.
+Apply full filter pipeline to all datasets and save to data/filtered_*.
 
 Auto-generates EDA console + charts before/after filtering.
 
@@ -10,10 +10,12 @@ Usage:
 from __future__ import annotations
 
 import json
+import random
 import sys
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -21,6 +23,7 @@ from vietnamese import get_question_words, is_quality_sample, normalize_text
 
 DATA_DIR = Path("data")
 EDA_DIR = Path("outputs/eda")
+CONFIG_PATH = Path("config/data.yaml")
 
 _LANG_DIR_MAP = {
     "data_en": "filtered_en",
@@ -43,6 +46,79 @@ def save_jsonl(rows: list[dict], path: Path):
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def load_config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {}
+    return yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+
+
+def _language_and_split(path: Path) -> tuple[str | None, str]:
+    rel = path.relative_to(DATA_DIR)
+    parts = rel.parts
+    lang_by_dir = {"data_en": "en", "data_vi": "vi"}
+    lang = lang_by_dir.get(parts[0]) if parts else None
+    return lang, path.stem
+
+
+def _optional_int(value) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def _sample_limit_from_config(path: Path, config: dict) -> tuple[int | None, str | None]:
+    lang, split = _language_and_split(path)
+    if lang is None:
+        return None, None
+
+    flat_key = f"{lang}_{split}_size"
+    if flat_key in config:
+        return _optional_int(config.get(flat_key)), flat_key
+
+    limits = config.get("filtered_sample_limits", {})
+    if isinstance(limits, dict):
+        if flat_key in limits:
+            return _optional_int(limits.get(flat_key)), f"filtered_sample_limits.{flat_key}"
+
+        lang_limits = limits.get(lang, {})
+        if isinstance(lang_limits, dict) and split in lang_limits:
+            return _optional_int(lang_limits.get(split)), f"filtered_sample_limits.{lang}.{split}"
+
+    return None, None
+
+
+def limit_filtered_samples(rows: list[dict], path: Path, config: dict) -> tuple[list[dict], dict]:
+    limit, key = _sample_limit_from_config(path, config)
+    if limit is None:
+        return rows, {"enabled": False, "removed": 0}
+    if limit < 0:
+        raise ValueError(f"{key} must be >= 0, got {limit}")
+
+    before = len(rows)
+    if before <= limit:
+        return rows, {
+            "enabled": True,
+            "key": key,
+            "limit": limit,
+            "before": before,
+            "after": before,
+            "removed": 0,
+        }
+
+    seed = config.get("filtered_sample_seed", config.get("seed", 42))
+    rng = random.Random(f"{seed}:{path.as_posix()}:{key}")
+    selected_indices = sorted(rng.sample(range(before), limit))
+    limited = [rows[idx] for idx in selected_indices]
+    return limited, {
+        "enabled": True,
+        "key": key,
+        "limit": limit,
+        "before": before,
+        "after": len(limited),
+        "removed": before - len(limited),
+    }
 
 
 def _answer_len(row: dict) -> int:
@@ -76,6 +152,17 @@ def _compute_stats(rows: list[dict], label: str) -> dict:
         if r.get("is_impossible", False):
             impossible += 1
 
+    def _len_stats(values: list[int]) -> dict:
+        if not values:
+            return {"mean": 0.0, "median": 0.0, "std": 0.0, "min": 0, "max": 0}
+        return {
+            "mean": float(np.mean(values)),
+            "median": float(np.median(values)),
+            "std": float(np.std(values)),
+            "min": int(np.min(values)),
+            "max": int(np.max(values)),
+        }
+
     return {
         "label": label,
         "n": len(rows),
@@ -87,9 +174,9 @@ def _compute_stats(rows: list[dict], label: str) -> dict:
         "qword_count": qword_count,
         "no_qword": no_qword,
         "qword_freq": qword_freq,
-        "answer_len": {"mean": float(np.mean(ans_lens)), "median": float(np.median(ans_lens)), "std": float(np.std(ans_lens)), "min": int(np.min(ans_lens)), "max": int(np.max(ans_lens))},
-        "context_len": {"mean": float(np.mean(ctx_lens)), "median": float(np.median(ctx_lens)), "std": float(np.std(ctx_lens)), "min": int(np.min(ctx_lens)), "max": int(np.max(ctx_lens))},
-        "question_len": {"mean": float(np.mean(q_lens)), "median": float(np.median(q_lens)), "std": float(np.std(q_lens)), "min": int(np.min(q_lens)), "max": int(np.max(q_lens))},
+        "answer_len": _len_stats(ans_lens),
+        "context_len": _len_stats(ctx_lens),
+        "question_len": _len_stats(q_lens),
     }
 
 
@@ -130,7 +217,21 @@ def print_stats(before: dict, after: dict):
                 print(f"    {w:20s} {c:>8,} ({100*c/total:>5.1f}%)")
 
 
+def print_sample_limit_stats(limit_stats: dict):
+    if not limit_stats.get("enabled"):
+        return
+
+    print(
+        f"  Filtered sample limit:    {limit_stats['before']:,} -> {limit_stats['after']:,} "
+        f"({limit_stats['key']}={limit_stats['limit']:,}, removed {limit_stats['removed']:,})"
+    )
+
+
 def plot_stats(before: dict, after: dict, name: str):
+    if after["n"] == 0:
+        print("  [SKIP] no samples after filtering, skipping charts")
+        return
+
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -225,6 +326,7 @@ def run_pipeline(path: Path):
     print(f"  {path}  →  {out_dir / f'{name}.jsonl'}")
     print(f"{'=' * 60}")
 
+    config = load_config()
     rows = load_jsonl(path)
     before_stats = _compute_stats(rows, "Before")
 
@@ -232,9 +334,7 @@ def run_pipeline(path: Path):
     kept = []
 
     for row in rows:
-        q = normalize_text(row["question"])
         c = normalize_text(row["context"])
-        lang = row.get("language", "en")
         ans = row["answers"]
 
         if not is_quality_sample(c, ans):
@@ -242,12 +342,17 @@ def run_pipeline(path: Path):
             continue
         kept.append(row)
 
+    after_filter_count = len(kept)
+    kept, limit_stats = limit_filtered_samples(kept, path, config)
     after_stats = _compute_stats(kept, "After")
 
     n_before = len(rows)
     n_after = len(kept)
     print(f"  Removed by quality filter: {rejected['quality']:,} ({100 * rejected['quality'] / n_before:.1f}%)")
+    print_sample_limit_stats(limit_stats)
     print(f"  Total removed:             {n_before - n_after:,} ({100 * (n_before - n_after) / n_before:.1f}%)")
+    if after_filter_count != n_after:
+        print(f"  Final filtered samples:     {after_filter_count:,} -> {n_after:,}")
 
     print_stats(before_stats, after_stats)
     plot_stats(before_stats, after_stats, name)
@@ -274,7 +379,7 @@ def main():
         run_pipeline(path)
 
     print(f"\n{'=' * 60}")
-    print(f"  Done! Saved to outputs/filtered_en/ and outputs/filtered_vi/")
+    print(f"  Done! Saved to data/filtered_en/ and data/filtered_vi/")
     print(f"{'=' * 60}")
 
 
