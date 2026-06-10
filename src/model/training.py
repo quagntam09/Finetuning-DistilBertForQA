@@ -599,7 +599,6 @@ class QATrainer:
             train_loss = self.train_one_epoch(epoch)
             val_loss = self.evaluate()
             metrics = self.evaluate_metrics()
-            # Update in-memory history first so it's up-to-date for any best-checkpoint save
             self.history.setdefault("train_loss", []).append(train_loss)
             self.history.setdefault("val_loss", []).append(val_loss)
             if metrics:

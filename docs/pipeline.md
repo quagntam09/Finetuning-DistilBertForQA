@@ -53,6 +53,14 @@ Chạy: `python src/filter_pipeline.py`
 | `build_qa_datasets(tokenizer, config)` | `DatasetDict` (tokenized) | Gọi prepare_train/eval_features |
 | `load_dataset_for_inference()` | dict tensors | Single sample inference |
 
+### training.py (train theo profile)
+
+| Function | Output | Ghi chú |
+|---|---|---|
+| `QATrainer.train()` | `training_history.json`, `best_model/`, plots | Train một profile trong `config/model.yaml` |
+| `run_profile_pipeline()` | `pipeline_history.json`, pipeline plots | Chạy nhiều profile liên tiếp theo `default_pipeline_profiles` hoặc `--profiles` |
+| `load_checkpoint()` | model weights | Dùng `init_checkpoint_dir` để transfer giữa các profile |
+
 ### dataset.py (tokenize & align)
 
 | Function | Input | Output |
@@ -66,7 +74,11 @@ Chạy: `python src/filter_pipeline.py`
 # Bước 1: Filter + EDA (chạy 1 lần sau khi download dataset mới)
 python src/filter_pipeline.py
 
-# Bước 2: Train (data_loader tự động dùng file filtered)
+# Bước 2: Train default pipeline
+# Hiện tại: train_en -> train_vi_from_en
+python src/model/training.py
+
+# Hoặc train một profile riêng
 python src/model/training.py --profile train_vi
 ```
 
@@ -78,3 +90,5 @@ python src/model/training.py --profile train_vi
 - Nếu profile trỏ raw path `data/data_*/*.jsonl`, data_loader sẽ ưu tiên file filtered tương ứng nếu tồn tại; nếu profile trỏ thẳng `data/filtered_*`, nó load đúng file đó.
 - `is_quality_sample` lọc answer quá ngắn, không khớp context, hoặc bị cắt giữa token/từ.
 - Question words hiện chỉ dùng cho thống kê EDA và question-group sampler, không dùng để loại mẫu trong `filter_pipeline.py`.
+- Default training pipeline lấy từ `config/model.yaml::default_pipeline_profiles`; hiện là `train_en` rồi `train_vi_from_en`.
+- Best checkpoint mặc định chọn theo `best_metric: f1`; `val_loss` vẫn được lưu để vẽ loss curve.

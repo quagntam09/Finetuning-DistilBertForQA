@@ -11,8 +11,8 @@ allow_oversample: false
 
 filtered_sample_seed: 42
 en_train_size: 30000
-en_validation_size:
-en_test_size:
+en_validation_size: 5000
+en_test_size: 5000
 vi_train_size: 
-vi_validation_size:
-vi_test_size:
+vi_validation_size: 5000
+vi_test_size: 

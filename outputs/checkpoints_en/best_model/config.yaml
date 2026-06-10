@@ -33,7 +33,7 @@ eval_strategy: epoch
 save_strategy: epoch
 track_eval_metrics: true
 tune_no_answer_threshold: false
-no_answer_threshold: 0.0
+no_answer_threshold: -7.512063072753906
 answer_only: false
 save_best_model: true
 best_metric: f1
@@ -47,15 +47,6 @@ onnx_opset_version: 14
 seed: 42
 logging_steps: 100
 log_level: info
-lora_r: 8
-lora_alpha: 16
-lora_target_modules:
-- q_lin
-- v_lin
-- k_lin
-- out_lin
-lora_dropout: 0.05
-lora_bias: none
 train_file: data/filtered_en/data_en_train_filtered.jsonl
 validation_file: data/filtered_en/data_en_validation_filtered.jsonl
 profile_name: train_en

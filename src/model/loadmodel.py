@@ -5,8 +5,6 @@ from config_model import Config
 
 
 class CustomDistilBertQA(nn.Module):
-    """DistilBERT extractive QA model for full fine-tuning."""
-
     def __init__(self, config=None):
         super().__init__()
         self.config = config or Config.from_yaml()

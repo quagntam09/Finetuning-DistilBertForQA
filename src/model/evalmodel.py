@@ -135,6 +135,16 @@ def _best_metric_scores(prediction: str, gold_answers: list[str]) -> tuple[int, 
 
 def qa_eval_collate(features: list[dict]) -> dict:
     """Collate QA eval batches while preserving offset_mapping None values."""
+
+    def _normalize_offset(offset):
+        if offset is None:
+            return None
+        if hasattr(offset, "tolist"):
+            offset = offset.tolist()
+        if isinstance(offset, (list, tuple)) and len(offset) == 2:
+            return (int(offset[0]), int(offset[1]))
+        return offset
+
     batch = {}
     tensor_keys = [
         "input_ids",
@@ -161,7 +171,7 @@ def qa_eval_collate(features: list[dict]) -> dict:
             value = feature["offset_mapping"]
             if hasattr(value, "tolist"):
                 value = value.tolist()
-            offsets.append(value)
+            offsets.append([_normalize_offset(offset) for offset in value])
         batch["offset_mapping"] = offsets
 
     return batch
@@ -171,7 +181,7 @@ def evaluate_loss(model, val_loader, loss_fn, device) -> float:
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
-        for batch in val_loader:
+        for batch in tqdm(val_loader, desc="Validation loss", leave=False):
             input_ids       = batch["input_ids"].to(device)
             attention_mask  = batch["attention_mask"].to(device)
             start_positions = batch["start_positions"].to(device)
@@ -238,7 +248,9 @@ def evaluate_qa_metrics(
         })
 
     span_predictions, references, no_answer_score_diffs = [], [], []
-    for sample_idx, example in enumerate(raw_examples):
+    for sample_idx, example in enumerate(
+        tqdm(raw_examples, desc="Post-process spans", leave=False)
+    ):
         features     = sample_features.get(sample_idx, [])
         gold_answers = example.get("answers", {}).get("text", [])
 
@@ -345,7 +357,7 @@ def evaluate_qa_metrics(
                 _apply_threshold(best_threshold),
                 use_squad_backend=False,
             )
-            for threshold in candidates:
+            for threshold in tqdm(candidates, desc="Tune no-answer threshold", leave=False):
                 scores = _score_predictions(
                     _apply_threshold(threshold),
                     use_squad_backend=False,

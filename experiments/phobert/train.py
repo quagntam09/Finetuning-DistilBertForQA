@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import AutoConfig, AutoTokenizer, get_linear_schedule_with_warmup
 
 from config_model import Config
 from experiments.phobert.modeling import PhoBertLoraQA
@@ -99,10 +99,18 @@ class PhoBertTrainer:
 
     def setup_tokenizer(self):
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name, use_fast=True)
+        model_config = AutoConfig.from_pretrained(self.config.model_name)
+        max_supported_length = int(getattr(model_config, "max_position_embeddings", 0) or 0) - 2
+        if max_supported_length > 0 and int(self.config.max_length) > max_supported_length:
+            print(
+                f"Reducing max_length from {self.config.max_length} to "
+                f"{max_supported_length} for {self.config.model_name} position embeddings."
+            )
+            self.config.max_length = max_supported_length
         if not self.tokenizer.is_fast:
-            raise RuntimeError(
-                f"{self.config.model_name} tokenizer does not provide fast offsets. "
-                "QA span training needs return_offsets_mapping."
+            print(
+                f"{self.config.model_name} uses a slow tokenizer; "
+                "using manual QA span offsets."
             )
         return self.tokenizer
 

@@ -11,7 +11,7 @@ sys.path.append(str(ROOT / "src" / "model"))
 
 import torch
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from config_model import Config
 from evalmodel import evaluate_qa_metrics, plot_compare_checkpoints, qa_eval_collate
@@ -53,11 +53,10 @@ def evaluate_checkpoint(checkpoint_dir, device):
     checkpoint_dir = Path(checkpoint_dir)
     config = load_checkpoint_config(checkpoint_dir)
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir if checkpoint_dir.exists() else config.model_name, use_fast=True)
-    if not tokenizer.is_fast:
-        raise RuntimeError(
-            f"{config.model_name} tokenizer does not provide fast offsets. "
-            "QA metric evaluation needs return_offsets_mapping."
-        )
+    model_config = AutoConfig.from_pretrained(config.model_name)
+    max_supported_length = int(getattr(model_config, "max_position_embeddings", 0) or 0) - 2
+    if max_supported_length > 0 and int(config.max_length) > max_supported_length:
+        config.max_length = max_supported_length
     tokenized = build_qa_datasets(tokenizer, config, is_training=False)
     eval_split = tokenized.get("validation", tokenized.get("test"))
     if eval_split is None:

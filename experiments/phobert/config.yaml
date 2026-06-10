@@ -9,7 +9,7 @@ defaults:
   impossible_column: is_impossible
   plausible_answers_column: plausible_answers
 
-  max_length: 384
+  max_length: 256
   doc_stride: 128
   padding: max_length
   use_vietnamese_segmentation: true
@@ -43,22 +43,22 @@ default_pipeline_profiles:
 profiles:
   train_phobert_base_vi:
     model_name: vinai/phobert-base
-    train_file: data/stage2_vi_train.jsonl
-    validation_file: data/stage2_vi_validation.jsonl
+    train_file: data/filtered_vi/data_vi_train_filtered.jsonl
+    validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
     output_dir: outputs/checkpoints_phobert_base_vi
     artifact_dir: artifacts/readers/phobert_base_vi
     artifact_name: phobert_base_vi
 
   train_phobert_base_v2_vi:
     model_name: vinai/phobert-base-v2
-    train_file: data/stage2_vi_train.jsonl
-    validation_file: data/stage2_vi_validation.jsonl
+    train_file: data/filtered_vi/data_vi_train_filtered.jsonl
+    validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
     output_dir: outputs/checkpoints_phobert_base_v2_vi
     artifact_dir: artifacts/readers/phobert_base_v2_vi
     artifact_name: phobert_base_v2_vi
 
   eval_vi:
-    validation_file: data/eval_vi_validation.jsonl
+    validation_file: data/filtered_vi/data_vi_validation_filtered.jsonl
     output_dir: outputs/compare_phobert
     artifact_dir: artifacts/readers/compare_phobert
     artifact_name: compare_phobert

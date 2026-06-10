@@ -57,8 +57,7 @@ defaults:
 
 default_profile: train_vi
 default_pipeline_profiles:
-  - train_en
-  - train_vi_from_en
+  - train_vi
 profiles:
   train_vi:
     train_file: data/filtered_vi/data_vi_train_filtered.jsonl
