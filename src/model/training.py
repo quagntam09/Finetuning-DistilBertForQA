@@ -68,18 +68,6 @@ def save_history(history, output_dir):
         json.dump(history, f, ensure_ascii=False, indent=2)
 
 
-def update_checkpoint_history(checkpoint_dir, history):
-    checkpoint_dir = Path(checkpoint_dir)
-    state_path = checkpoint_dir / "training_state.pt"
-    if not state_path.exists():
-        return
-
-    state = torch.load(state_path, map_location="cpu", weights_only=False)
-    state["history"] = history
-    torch.save(state, state_path)
-    save_history(history, checkpoint_dir)
-
-
 def _config_with_threshold(config, metrics):
     if not metrics or "no_answer_threshold" not in metrics:
         return config

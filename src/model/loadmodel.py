@@ -26,7 +26,6 @@ class CustomDistilBertQA(nn.Module):
         return start_logits.squeeze(-1), end_logits.squeeze(-1)
 
 
-# Backward-compatible alias for older scripts/imports.
 CustomLoraDistilBertQA = CustomDistilBertQA
 
 
