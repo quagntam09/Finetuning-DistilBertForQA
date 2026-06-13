@@ -82,16 +82,17 @@ Default pipeline hiện tại:
 
 ```yaml
 default_pipeline_profiles:
-  - train_en
-  - train_vi_from_en
+  - train_vi
 ```
 
-Nghĩa là khi chạy train không truyền profile, pipeline sẽ:
+Nghĩa là khi chạy train không truyền profile, pipeline sẽ train tiếng Việt bằng
+profile `train_vi`.
 
-1. Train tiếng Anh trước bằng profile `train_en`.
-2. Lấy `outputs/checkpoints_en/best_model` làm checkpoint khởi tạo.
-3. Train tiếp tiếng Việt bằng profile `train_vi_from_en`.
-4. Eval bước 2 trên validation tiếng Việt.
+Nếu muốn chạy transfer learning tiếng Anh rồi tiếng Việt, truyền profile rõ ràng:
+
+```bash
+.venv/bin/python src/model/training.py --profiles train_en train_vi_from_en
+```
 
 Các profile chính:
 
@@ -109,7 +110,7 @@ Các profile phụ:
 | `train_vi_answer_only` | Train tiếng Việt chỉ trên mẫu có answer, tắt tune no-answer threshold |
 | `train_vi_from_en_answer_only` | Khởi tạo từ checkpoint EN rồi train VI answer-only |
 | `train_en_from_vi` | Khởi tạo từ checkpoint VI rồi train EN, eval trên validation EN |
-| `eval_vi`, `eval_en`, `eval_vi_test` | Profile chỉ định split eval cho `evalmodel.py` |
+| `eval_vi`, `eval_en`, `eval_vi_test` | Profile cấu hình split eval; hiện chưa có CLI eval độc lập trong `evalmodel.py` |
 
 ## 5. Chạy train
 
@@ -172,14 +173,14 @@ Mỗi profile tạo output trong thư mục `output_dir` tương ứng:
 ```text
 outputs/checkpoints_en/
     training_history.json
-    loss_curve.png
+    loss_curves.png
     accuracy_f1_recall_per_epoch.png
     best_model/
         config.yaml
         training_state.pt
         tokenizer files
         training_history.json
-        loss_curve.png
+        loss_curves.png
         accuracy_f1_recall_per_epoch.png
 
 outputs/checkpoints_vi_from_en/
@@ -205,63 +206,47 @@ outputs/checkpoints_vi_from_en/
 
 ## 8. Eval checkpoint
 
-Eval checkpoint tiếng Việt sau default pipeline trên validation tiếng Việt:
+`src/model/evalmodel.py` hiện là module helper để tính metric và vẽ biểu đồ, chưa
+có CLI độc lập. Vì vậy các lệnh dạng sau không còn đúng với code hiện tại:
 
 ```bash
-.venv/bin/python src/model/evalmodel.py \
-  --checkpoint outputs/checkpoints_vi_from_en/best_model \
-  --profile eval_vi \
-  --save_dir outputs/eval_vi_from_en_on_vi
+.venv/bin/python src/model/evalmodel.py --checkpoint ...
 ```
 
-Eval checkpoint tiếng Anh trên validation tiếng Anh:
+Hiện có thể so sánh/evaluate nhiều checkpoint bằng script trong thí nghiệm
+PhoBERT:
 
 ```bash
-.venv/bin/python src/model/evalmodel.py \
-  --checkpoint outputs/checkpoints_en/best_model \
-  --profile eval_en \
-  --save_dir outputs/eval_train_en_on_en
+.venv/bin/python experiments/phobert/compare.py \
+  --checkpoints \
+  outputs/checkpoints_vi_from_en/best_model \
+  outputs/checkpoints_phobert_base_vi/best_model \
+  outputs/checkpoints_phobert_base_v2_vi/best_model \
+  --save-dir outputs/compare_vi_models
 ```
 
-Mặc định eval dùng `no_answer_threshold` đã lưu trong checkpoint. Không tune lại
-trên split eval để tránh dùng tập đánh giá làm tập chọn ngưỡng.
-
-Nếu muốn tune threshold trên validation, chạy thêm:
-
-```bash
-.venv/bin/python src/model/evalmodel.py \
-  --checkpoint outputs/checkpoints_vi_from_en/best_model \
-  --profile eval_vi \
-  --save_dir outputs/eval_vi_from_en_on_vi \
-  --tune_no_answer_threshold
-```
-
-Chỉ dùng cờ này cho validation, không dùng cho test cuối.
+Script này đọc `config.yaml` trong từng `best_model`, dùng
+`no_answer_threshold` đã lưu trong checkpoint và ghi kết quả vào `save_dir`.
 
 ## 9. Biểu đồ đánh giá
 
-Eval tạo các biểu đồ chuẩn trong `save_dir`:
+Training tự tạo các biểu đồ chuẩn trong `output_dir` và `best_model`:
 
 - `loss_curves.png`
-- `loss_heatmap.png`
-- `em_f1_per_epoch.png`
 - `accuracy_f1_recall_per_epoch.png`
-- `em_f1_bar.png`
-- `f1_histogram.png`
-- `recall_histogram.png`
-- `em_pie.png`
-- `f1_by_answer_length.png`
-- `confidence_distribution.png`
-- `pred_length_vs_f1.png`
 
-Kết quả số được lưu ở:
+Có thể tạo thêm dashboard từ history:
 
-- `eval_results.json`
-- `error_analysis.json`
+```bash
+.venv/bin/python scripts/generate_training_visualizations.py \
+  --run-dir outputs/checkpoints_vi_from_en
+```
+
+Output mặc định nằm trong `outputs/checkpoints_vi_from_en/visualizations/`.
 
 ## 10. Cách đọc kết quả hiện tại
 
 Nếu F1/EM xấp xỉ tỷ lệ no-answer của validation, mô hình có thể đang học cách
-trả lời rỗng/no-answer quá nhiều. Khi đó cần xem thêm `error_analysis.json`,
-`f1_histogram.png`, `recall_histogram.png` và nên bổ sung metric riêng cho
-answerable samples trước khi kết luận mô hình tốt.
+trả lời rỗng/no-answer quá nhiều. Khi đó cần xem thêm `training_history.json`,
+`has_answer_f1`, `no_answer_exact`, `no_answer_threshold` và biểu đồ
+`accuracy_f1_recall_per_epoch.png` trước khi kết luận mô hình tốt.

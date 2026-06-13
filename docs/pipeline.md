@@ -75,11 +75,14 @@ Chạy: `python src/filter_pipeline.py`
 python src/filter_pipeline.py
 
 # Bước 2: Train default pipeline
-# Hiện tại: train_en -> train_vi_from_en
+# Hiện tại: train_vi
 python src/model/training.py
 
 # Hoặc train một profile riêng
 python src/model/training.py --profile train_vi
+
+# Hoặc chạy transfer English -> Vietnamese
+python src/model/training.py --profiles train_en train_vi_from_en
 ```
 
 ## Lưu ý
@@ -90,5 +93,6 @@ python src/model/training.py --profile train_vi
 - Nếu profile trỏ raw path `data/data_*/*.jsonl`, data_loader sẽ ưu tiên file filtered tương ứng nếu tồn tại; nếu profile trỏ thẳng `data/filtered_*`, nó load đúng file đó.
 - `is_quality_sample` lọc answer quá ngắn, không khớp context, hoặc bị cắt giữa token/từ.
 - Question words hiện chỉ dùng cho thống kê EDA và question-group sampler, không dùng để loại mẫu trong `filter_pipeline.py`.
-- Default training pipeline lấy từ `config/model.yaml::default_pipeline_profiles`; hiện là `train_en` rồi `train_vi_from_en`.
+- Default training pipeline lấy từ `config/model.yaml::default_pipeline_profiles`; hiện là `train_vi`.
+- Muốn chạy transfer EN -> VI thì truyền rõ `--profiles train_en train_vi_from_en`.
 - Best checkpoint mặc định chọn theo `best_metric: f1`; `val_loss` vẫn được lưu để vẽ loss curve.
